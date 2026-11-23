@@ -826,14 +826,14 @@ P_{RR}={1\over J^2}\big[{}
  &+P_s(Z_{st}Z_t-Z_{tt}Z_s)
   +P_t(Z_{st}Z_s-Z_{ss}Z_t)
 \big]\\
-&-{\left(\partial J/\partial R\right)\over J^2}(P_sZ_t-P_tZ_s),\\[4pt]
+&-{\left(\partial J/\partial R\right)\over J^2}(P_sZ_t-P_tZ_s),\\
 P_{RZ}={1\over J^2}\big[{}
  &-P_{ss}Z_tR_t-P_{tt}R_sZ_s
   +P_{st}(Z_sR_t+Z_tR_s)\\
  &-P_s(R_{st}Z_t-R_{tt}Z_s)
   -P_t(R_{st}Z_s-R_{ss}Z_t)
 \big]\\
-&-{\left(\partial J/\partial R\right)\over J^2}(-P_sR_t+P_tR_s),\\[4pt]
+&-{\left(\partial J/\partial R\right)\over J^2}(-P_sR_t+P_tR_s),\\
 P_{ZZ}={1\over J^2}\big[{}
  &P_{ss}R_t^2-2P_{st}R_sR_t+P_{tt}R_s^2\\
  &+P_s(R_{st}R_t-R_{tt}R_s)
