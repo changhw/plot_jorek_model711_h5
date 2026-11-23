@@ -10,17 +10,18 @@ NaN.  Angles passed with ``--phi`` are in degrees.
 
 Example::
 
-    python util/plot_jorek_model711_h5.py jorek000100.h5 --phi 30
-    python util/plot_jorek_model711_h5.py jorek000100.h5 --point 2.85 -0.15
-    python util/plot_jorek_model711_h5.py jorek000100.h5 --rectangular-grid 200 160
-    python util/plot_jorek_model711_h5.py jorek000100.h5 --si-units
-    python util/plot_jorek_model711_h5.py jorek000100.h5 --output jorek000100.png
+    python plot_jorek_model711_h5.py jorek000100.h5 --phi 30
+    python plot_jorek_model711_h5.py jorek000100.h5 --point 2.85 -0.15
+    python plot_jorek_model711_h5.py jorek000100.h5 --rectangular-grid 200 160
+    python plot_jorek_model711_h5.py jorek000100.h5 --si-units
+    python plot_jorek_model711_h5.py jorek000100.h5 --output jorek000100.png
 """
 
 from __future__ import annotations
 
 import argparse
 import math
+import warnings
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -48,11 +49,11 @@ MODEL_VARIABLES = (
 # profiles and magnetic components are appended after interpolation.
 PLOT_VARIABLES = MODEL_VARIABLES + ("psi_eq", "Fprof_eq", "BR", "BZ", "B_phi")
 
-# These constants match JOREK's models/constants.f90.  In particular, the MHD
-# normalization uses the proton mass rather than the atomic mass constant.
+# These constants match the current JOREK models/constants.f90. Older
+# restarts may use another mass convention; prefer their stored normalization.
 MU_ZERO = 4.0e-7 * math.pi
 ELEMENTARY_CHARGE = 1.602176565e-19
-PROTON_MASS = 1.67262178e-27
+ATOMIC_MASS_UNIT = 1.660539040e-27
 
 SI_BASE_UNITS = {
     "A3/psi": "Wb",
@@ -156,7 +157,17 @@ def load_restart(filename: Path) -> Restart:
             ),
             "si_units": False,
             "time_scale": 1.0,
+            "t_norm": float(read_scalar(h5, "t_norm")) if "t_norm" in h5 else None,
+            "sqrt_mu0_rho0": (
+                float(read_scalar(h5, "sqrt_mu0_rho0"))
+                if "sqrt_mu0_rho0" in h5 else None
+            ),
         }
+        if "axis_node" in h5:
+            flags = np.char.upper(np.char.strip(np.asarray(h5["axis_node"]).astype(str)))
+            if not np.all(np.isin(flags, ("T", "F"))):
+                raise ValueError("axis_node must contain JOREK 'T'/'F' flags")
+            restart["axis_node"] = flags == "T"
 
     validate_restart(restart)
     return restart
@@ -166,18 +177,13 @@ def enable_si_units(restart: Restart) -> dict[str, float]:
     """Return model-711 field scales and configure SI time normalization.
 
     ``central_density`` is stored in units of 1e20 m^-3 and ``central_mass``
-    is the central ion mass in proton-mass units.  Vector potentials, magnetic
-    flux, equilibrium profiles, and magnetic fields deliberately get no scale.
+    is the central ion mass in atomic-mass units in current JOREK. Prefer
+    stored time normalization to preserve older files' mass conventions.
     """
-    central_density = restart["central_density"]
-    central_mass = restart["central_mass"]
+    central_density = restart.get("central_density", math.nan)
     if not math.isfinite(central_density) or central_density <= 0.0:
         raise ValueError(
             "--si-units requires a positive central_density dataset in the HDF5 file"
-        )
-    if not math.isfinite(central_mass) or central_mass <= 0.0:
-        raise ValueError(
-            "--si-units requires a positive central_mass dataset in the HDF5 file"
         )
 
     # Match JOREK's data-extractor compatibility rule: current files store a
@@ -185,9 +191,34 @@ def enable_si_units(restart: Restart) -> dict[str, float]:
     density_scale = (
         central_density if central_density >= 1.0e15 else central_density * 1.0e20
     )
-    time_scale = math.sqrt(MU_ZERO * density_scale * central_mass * PROTON_MASS)
+    stored = {}
+    for name in ("t_norm", "sqrt_mu0_rho0"):
+        value = restart.get(name)
+        if value is None:
+            continue
+        if math.isfinite(value) and value > 0.0:
+            stored[name] = value
+        else:
+            warnings.warn(f"Ignoring invalid {name}={value}; expected a finite positive value")
+    if len(stored) == 2 and not math.isclose(
+        stored["t_norm"], stored["sqrt_mu0_rho0"], rel_tol=1.0e-10, abs_tol=0.0
+    ):
+        raise ValueError("inconsistent stored t_norm and sqrt_mu0_rho0")
+    if stored:
+        source = next(iter(stored))
+        time_scale = stored[source]
+    else:
+        central_mass = restart.get("central_mass", math.nan)
+        if not math.isfinite(central_mass) or central_mass <= 0.0:
+            raise ValueError(
+                "--si-units requires positive central_mass when no valid stored "
+                "time normalization is available"
+            )
+        source = "atomic-mass fallback"
+        time_scale = math.sqrt(MU_ZERO * density_scale * central_mass * ATOMIC_MASS_UNIT)
     restart["si_units"] = True
     restart["time_scale"] = time_scale
+    restart["time_scale_source"] = source
     return {
         "uR": 1.0 / time_scale,
         "uZ": 1.0 / time_scale,
@@ -250,6 +281,8 @@ def validate_restart(restart: Restart) -> None:
     #   vertex = (vertex, element)
     n_degrees = ((restart["order"] + 1) // 2) ** 2
     n_nodes = coordinates.shape[-1]
+    if "axis_node" in restart and restart["axis_node"].shape != (n_nodes,):
+        raise ValueError(f"unexpected axis_node shape {restart['axis_node'].shape}")
     expected_values = (restart["n_var"], n_degrees, restart["n_tor"], n_nodes)
     if restart["values"].shape != expected_values:
         raise ValueError(
@@ -699,43 +732,70 @@ def newton_local_coordinates(
     ``[0,1]`` follow JOREK's ``find_RZ_single`` algorithm.
 
     ``element_index`` is a zero-based candidate selected by its bounding box.
-    ``tolerance`` is the accepted physical ``sqrt(dR**2+dZ**2)`` residual.
+    ``tolerance`` is the accepted physical ``abs(dR)+abs(dZ)`` residual.
     The function returns ``(s,t)`` on convergence and ``None`` otherwise.
     """
-    best: tuple[float, float, float] | None = None
+    axis_edges = np.zeros(4, dtype=bool)
+    if "axis_node" in restart:
+        flags = restart["axis_node"][restart["vertex"][:, element_index]]
+        axis_edges = flags & np.roll(flags, -1)
 
     for initial_s, initial_t in NEWTON_STARTS:
         s = initial_s
         t = initial_t
-        for _ in range(NEWTON_MAX_ITERATIONS):
+        for iteration in range(NEWTON_MAX_ITERATIONS + 1):
             R, Z, R_s, R_t, Z_s, Z_t = geometry_in_element(restart, element_index, s, t)
             residual_R = R - R0
             residual_Z = Z - Z0
-            residual = math.hypot(residual_R, residual_Z)
+            residual = abs(residual_R) + abs(residual_Z)
 
-            if best is None or residual < best[0]:
-                best = (residual, s, t)
             if residual <= tolerance:
                 return s, t
+            if iteration == NEWTON_MAX_ITERATIONS or not math.isfinite(residual):
+                break
 
+            # Scale the system as in find_RZ_single before forming its determinant.
+            if not all(math.isfinite(v) for v in (R_s, R_t, Z_s, Z_t)):
+                break
+            scale = max(abs(R_s), abs(R_t), abs(Z_s), abs(Z_t))
+            if not math.isfinite(scale) or scale <= np.finfo(float).tiny:
+                break
+            R_s, R_t, Z_s, Z_t = (v / scale for v in (R_s, R_t, Z_s, Z_t))
+            residual_R /= scale
+            residual_Z /= scale
             jacobian = R_s * Z_t - R_t * Z_s
-            jacobian_scale = R_s**2 + R_t**2 + Z_s**2 + Z_t**2
             if (
                 not math.isfinite(jacobian)
-                or abs(jacobian) <= 100.0 * np.finfo(float).eps * jacobian_scale
+                or abs(jacobian) <= 100.0 * np.finfo(float).eps
             ):
                 break
 
             # Solve [R_s R_t; Z_s Z_t] [ds;dt] = -[dR;dZ].
             delta_s = (R_t * residual_Z - Z_t * residual_R) / jacobian
             delta_t = (Z_s * residual_R - R_s * residual_Z) / jacobian
+            if not math.isfinite(delta_s) or not math.isfinite(delta_t):
+                break
             delta_s = float(np.clip(delta_s, -NEWTON_MAX_STEP, NEWTON_MAX_STEP))
             delta_t = float(np.clip(delta_t, -NEWTON_MAX_STEP, NEWTON_MAX_STEP))
-            s = float(np.clip(s + delta_s, 0.0, 1.0))
-            t = float(np.clip(t + delta_t, 0.0, 1.0))
+            next_s = float(np.clip(s + delta_s, 0.0, 1.0))
+            next_t = float(np.clip(t + delta_t, 0.0, 1.0))
+            on_axis = axis_edges & np.array(
+                [next_t == 0.0, next_s == 1.0, next_t == 1.0, next_s == 0.0]
+            )
+            if np.any(on_axis):
+                next_R, next_Z, *_ = geometry_in_element(
+                    restart, element_index, next_s, next_t
+                )
+                next_residual = abs(next_R - R0) + abs(next_Z - Z0)
+                if not math.isfinite(next_residual) or next_residual > tolerance:
+                    if on_axis[0] or on_axis[2]:
+                        next_t = 0.5 * (t + next_t)
+                    if on_axis[1] or on_axis[3]:
+                        next_s = 0.5 * (s + next_s)
+            if next_s == s and next_t == t:
+                break
+            s, t = next_s, next_t
 
-    if best is not None and best[0] <= tolerance:
-        return best[1], best[2]
     return None
 
 
@@ -744,7 +804,7 @@ def find_element(
     R0: float,
     Z0: float,
     search_bounds: np.ndarray,
-    tolerance: float = 1.0e-10,
+    tolerance: float | None = None,
 ) -> tuple[int, float, float] | None:
     """Find the zero-based element index and local ``(s,t)`` for ``(R0,Z0)``.
 
@@ -757,6 +817,10 @@ def find_element(
     """
     if not math.isfinite(R0) or not math.isfinite(Z0):
         return None
+    if tolerance is None:
+        tolerance = 1.0e-13 * max(1.0, abs(R0), abs(Z0))
+    if not math.isfinite(tolerance) or tolerance <= 0.0:
+        raise ValueError("point-search tolerance must be finite and positive")
 
     candidate_mask = (
         (search_bounds[:, 0] <= R0)
@@ -1069,7 +1133,7 @@ def calculate_fields(
 
     # Model 711 uses A = AR e_R + AZ e_Z + A3 grad(phi).  The following
     # expressions are curl(A), with the equilibrium F profile added to B_phi.
-    radius = geometry["R"]
+    radius = np.where(geometry["R"] == 0.0, np.nan, geometry["R"])
     with np.errstate(divide="ignore", invalid="ignore"):
         fields["BR"] = ((a3_Z - az_phi) / radius).ravel()
         fields["BZ"] = ((ar_phi - a3_R) / radius).ravel()
@@ -1243,7 +1307,10 @@ def print_point_result(
 ) -> None:
     """Print one ``--point`` result, or report that the point was not found."""
     if result is None:
-        print(f"Point (R={R0:.12g}, Z={Z0:.12g}) is outside the JOREK mesh")
+        print(
+            f"Point (R={R0:.12g}, Z={Z0:.12g}): outside the JOREK mesh "
+            "or point location did not converge"
+        )
         return
 
     print(

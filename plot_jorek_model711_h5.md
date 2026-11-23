@@ -25,16 +25,21 @@ fields, a separate figure shows the sum of all positive toroidal harmonics.
 
 ## Running the script
 
+The examples use the supplied ASDEX Upgrade restart `jorek000000.h5`.
+Its conservative element bounds span approximately $R=1.168$–$2.100$ m and
+$Z=-0.900$–$0.744$ m. These are bounding limits, not a rectangular plasma
+boundary. The point example below is inside this mesh.
+
 Plot all available fields at `phi = 0`:
 
 ```console
-python util/plot_jorek_model711_h5.py jorek000100.h5
+python plot_jorek_model711_h5.py jorek000000.h5
 ```
 
 Convert density, temperatures, velocities, and displayed time to SI units:
 
 ```console
-python util/plot_jorek_model711_h5.py jorek000100.h5 \
+python plot_jorek_model711_h5.py jorek000000.h5 \
   --si-units --variables uR,uZ,u_phi,rho,T_i,T_e
 ```
 
@@ -44,28 +49,28 @@ of all `n > 0` harmonics. Both figures are created before one `plt.show()` call.
 Plot selected fields at 30 degrees and save both component figures:
 
 ```console
-python util/plot_jorek_model711_h5.py jorek000100.h5 \
+python plot_jorek_model711_h5.py jorek000000.h5 \
   --phi 30 \
   --variables A3/psi,rho,T_i,T_e,BR,BZ,B_phi \
-  --output jorek000100.png
+  --output jorek000000.png
 ```
 
-This writes the total fields to `jorek000100.png` and the positive-harmonic sum
-to `jorek000100_nonaxisymmetric.png`.
+This writes the total fields to `jorek000000.png` and the positive-harmonic sum
+to `jorek000000_nonaxisymmetric.png`.
 
 Find the element and local coordinates of one physical point and print all
 field values there:
 
 ```console
-python util/plot_jorek_model711_h5.py jorek000100.h5 \
-  --phi 30 --point 2.85 -0.15
+python plot_jorek_model711_h5.py jorek000000.h5 \
+  --phi 30 --point 1.8 0.1
 ```
 
 `--point` is an additional numerical query; it does not suppress the figures.
-The printed result has the form
+For the supplied `jorek000000.h5`, the printed result has the form
 
 ```text
-Point (R=2.85, Z=-0.15): element rank=123, s=0.41, t=0.68
+Point (R=1.8, Z=0.1): element rank=1525, s=0.573974021583, t=0.148416827563
   A3/psi: ...
   ...
   B_phi: ...
@@ -77,19 +82,19 @@ is zero-based but is not printed by the command-line interface.
 Create separate original and uniform-grid figures and show them together:
 
 ```console
-python util/plot_jorek_model711_h5.py jorek000100.h5 \
+python plot_jorek_model711_h5.py jorek000000.h5 \
   --phi 30 --rectangular-grid 200 160 \
   --variables rho,T_i,T_e,BR,BZ,B_phi \
-  --output jorek000100.png
+  --output jorek000000.png
 ```
 
 Without `--output`, all figures are created before a single `plt.show()` call,
 so their windows appear together. Rectangular mode creates four figures: total
 and non-axisymmetric fields on both the original and rectangular grids. With
 the output argument shown above, they are saved as
-`jorek000100_original.png`, `jorek000100_rectangular.png`,
-`jorek000100_nonaxisymmetric_original.png`, and
-`jorek000100_nonaxisymmetric_rectangular.png`.
+`jorek000000_original.png`, `jorek000000_rectangular.png`,
+`jorek000000_nonaxisymmetric_original.png`, and
+`jorek000000_nonaxisymmetric_rectangular.png`.
 
 The command-line parameters are:
 
@@ -105,8 +110,8 @@ The command-line parameters are:
   second path;
 - `--point R0 Z0`: print the containing JOREK element rank, local `(s,t)`
   coordinates, and all 14 total-field values at the requested physical
-  position, in addition to producing the requested figures. A point outside
-  the mesh is reported as outside;
+  position, in addition to producing the requested figures. A failed search
+  reports that the point is outside the mesh or point location did not converge;
 - `--rectangular-grid NR NZ`: create separate original element-local and
   uniform rectangular-grid figures for the total and `n > 0` components,
   displaying all four with one `plt.show()` call. `nsub` controls the original
@@ -121,12 +126,12 @@ The command-line parameters are:
 ## Optional conversion to SI units
 
 Current restarts contain `central_density` in units of
-$10^{20}\,\mathrm{m}^{-3}$ and `central_mass` in proton-mass units. With
+$10^{20}\,\mathrm{m}^{-3}$ and `central_mass` in atomic-mass units. With
 
 $$
 n_0=\mathtt{central\_density}\,10^{20}\ \mathrm{m}^{-3},
 \qquad
-\rho_0=n_0\,\mathtt{central\_mass}\,m_p,
+\rho_0=n_0\,\mathtt{central\_mass}\,m_u,
 $$
 
 JOREK's time normalization is
@@ -157,10 +162,18 @@ t_{\mathrm{display}} &=10^3t_{\mathrm{now}}t_{\mathrm{norm}}
 \end{aligned}
 $$
 
-Here $m_p$ is the proton mass used in JOREK's MHD normalization, not the
-slightly different atomic mass constant. A positive `central_density` and
-`central_mass` must be present in the HDF5 file; otherwise `--si-units` stops
-with an explicit error.
+The time normalization is selected in this order:
+
+1. A finite positive `t_norm` stored in the restart.
+2. A finite positive stored `sqrt_mu0_rho0`.
+3. The formula above with $m_u=1.660539040\times10^{-27}$ kg, matching
+   current JOREK's atomic mass unit.
+
+Stored normalization preserves older restarts that used proton mass. Invalid
+stored values produce a warning and are skipped. If both stored values are
+valid but disagree by more than a relative tolerance of $10^{-10}$, conversion
+stops with an error. Positive `central_density` is always required;
+positive `central_mass` is required only for the calculated fallback.
 
 Only the six normalized model variables above and time are multiplied by
 conversion factors. `A3/psi`, `AR`, `AZ`, `psi_eq`, `Fprof_eq`, `BR`, `BZ`,
@@ -174,9 +187,15 @@ units:
 | `AR`, `AZ`, `Fprof_eq` | $\mathrm{T\,m}$ |
 | `BR`, `BZ`, `B_phi` | $\mathrm{T}$ |
 
-The figure axes similarly use `R [m]` and `Z [m]`. If mass density rather than
-number density is required, multiply the displayed number density by
-`central_mass` and $m_p$.
+The figure axes similarly use `R [m]` and `Z [m]`. For mass density consistent
+with the selected normalization, use
+$\rho_{\mathrm{mass,SI}}=\rho_{\mathrm{code}}t_{\mathrm{norm}}^2/\mu_0$.
+The plotted `rho` remains number density.
+
+For axisymmetric flux, $\psi=\Psi_{\mathrm{pol}}/(2\pi)$ is flux per radian.
+The `Wb` label is dimensionally valid, but does not mean total poloidal flux.
+No factor of $2\pi$ is applied to stored coefficients. In a non-axisymmetric
+field, `A3` is the toroidal vector-potential coefficient.
 
 ## Procedural structure
 
@@ -253,7 +272,8 @@ The functions have the following responsibilities:
 `load_restart()` returns a `restart` dictionary containing HDF5 arrays and
 metadata. Important keys include `values`, `coordinates`, `size`, `vertex`,
 `psi_eq`, `fprof_eq`, `order`, `n_tor`, `n_period`, `central_density`, and
-`central_mass`.
+`central_mass`. Optional normalization keys are `t_norm` and `sqrt_mu0_rho0`;
+optional `axis_node` flags identify nodes on collapsed magnetic-axis edges.
 
 `calculate_geometry()` returns a separate `geometry` dictionary containing
 `R`, `Z`, `R_s`, `R_t`, `Z_s`, `Z_t`, and `jacobian`. Keeping these values in
@@ -297,6 +317,10 @@ axisymmetric geometry.
 
 The one-based node indices in `vertex` are converted to zero-based Python
 indices immediately after loading.
+
+Optional `axis_node` flags have shape `(n_nodes,)` and contain `T` or `F`.
+They enable the collapsed-axis safeguard during point location. Optional
+scalar `t_norm` and `sqrt_mu0_rho0` datasets supply time normalization.
 
 ## Sampling inside an element
 
@@ -348,8 +372,7 @@ h_{Rd}(q) &= \sum_{k=d}^{r-1}\binom{k}{d}B_{p-k}^p(q),
 \end{aligned}
 $$
 
-For `n_order=3`, use the same symbols as
-[`plot_jorek_h5.md`](plot_jorek_h5.md):
+For `n_order=3`, the endpoint functions are:
 
 $$
 \begin{aligned}
@@ -456,8 +479,7 @@ H_{4,4}={}&9s(1-s)^2(1-t)t^2.
 \end{aligned}
 $$
 
-These are the same $H_{v,d}$ symbols and factored expressions used in
-`plot_jorek_h5.md`. For quintic elements, the script constructs the analogous
+For quintic elements, the script constructs the analogous
 tensor products for the nine derivative pairs in JOREK's square-by-square
 ordering.
 
@@ -478,7 +500,7 @@ derivatives would be calculated from the same polynomial basis.
 
 ## Poloidal finite-element interpolation
 
-Using exactly the notation of `plot_jorek_h5.md`, a model variable $P$ inside
+A model variable $P$ inside
 element $e$ is
 
 $$
@@ -551,8 +573,7 @@ P_{m,c}(s,t)\cos(n_m\phi)
 \right].
 $$
 
-The analytic toroidal derivatives use the same notation as
-`plot_jorek_h5.md`:
+The analytic toroidal derivatives are:
 
 $$
 \begin{aligned}
@@ -611,12 +632,14 @@ No `nsub` samples or Matplotlib triangles participate in this calculation.
 The point value is therefore an evaluation of the stored finite-element
 polynomial, rather than an interpolation of pixels or plot vertices.
 
+Source paths below are relative to the root of a JOREK source checkout.
+
 The point-search implementation follows the algorithm in
-[`grids/grid_utils/find_RZ.f90`](../grids/grid_utils/find_RZ.f90) and the
+`grids/grid_utils/find_RZ.f90` and the
 candidate-element search in
-[`tools/mod_element_rtree.f90`](../tools/mod_element_rtree.f90). JOREK's
+`tools/mod_element_rtree.f90`. JOREK's
 curved-element bound calculation is in
-[`diagnostics/RZ_minmax.f90`](../diagnostics/RZ_minmax.f90).
+`diagnostics/RZ_minmax.f90`.
 
 JOREK first uses an R-tree containing element bounding boxes to find elements
 that might contain the requested point. It then calls `find_RZ_single` for
@@ -701,19 +724,29 @@ As in JOREK, the Python search uses:
 
 - five initial guesses: `(0.5,0.5)`, `(0.75,0.75)`, `(0.75,0.25)`,
   `(0.25,0.75)`, and `(0.25,0.25)`;
-- at most 20 Newton iterations per initial guess;
+- at most 20 Newton updates per initial guess, evaluating the initial point
+  and every updated point;
 - a maximum absolute step of 0.25 in each local direction;
 - clipping of every iterate to `0 <= s,t <= 1`;
 - rejection of singular coordinate Jacobians.
 
-The Python implementation additionally requires the physical residual
+When optional `axis_node` metadata is present, an edge with two axis nodes
+is treated as collapsed. A clipped update landing there is accepted if its
+residual passes; otherwise the affected coordinate is moved halfway back
+toward the previous interior iterate. Without these flags, this special
+safeguard is unavailable. A stagnant iterate ends the current attempt.
+
+Like current JOREK, the default acceptance criterion uses the L1 residual:
 
 $$
-\sqrt{\Delta R^2+\Delta Z^2}\leq10^{-10}
+|\Delta R|+|\Delta Z|\leq10^{-13}\max(1,|R_0|,|Z_0|).
 $$
 
-before accepting a solution. This prevents an outside point that has merely
-stagnated on an element boundary from being classified as inside.
+An explicit positive `tolerance` argument to `find_element()` overrides this
+threshold. The Newton system is scaled by its largest absolute Jacobian entry
+before inversion. Unlike JOREK, this script does not implement its relaxed,
+topology-dependent approximate fallback. Failure can therefore mean either
+an outside point or nonconvergence; it is not proof of being outside.
 
 `find_element()` returns a zero-based Python element index together with
 `(s,t)`. The higher-level `evaluate_at_position()` also reports
@@ -768,9 +801,8 @@ R_{ss},\ R_{st},\ R_{tt},\qquad
 Z_{ss},\ Z_{st},\ Z_{tt}
 $$
 
-with the local derivative sums given above. Following the symbols and expanded
-operators in `plot_jorek_h5.md`, the physical derivatives of the geometry
-Jacobian are
+with the local derivative sums given above. The physical derivatives of the
+geometry Jacobian are
 
 $$
 \begin{aligned}
@@ -833,9 +865,10 @@ x=R\cos\phi,\qquad y=-R\sin\phi,
 $$
 
 as seen in
-[`diagnostics/new_diag/mod_expression.f90`](../diagnostics/new_diag/mod_expression.f90).
+`diagnostics/new_diag/mod_expression.f90`.
 Thus positive $\phi$ points opposite to the usual mathematical cylindrical
-angle. With JOREK's physical components $(B_R,B_\phi,B_Z)$, a current-density
+angle. The ordered triad $(\mathbf e_R,\mathbf e_Z,\mathbf e_\phi)$ is
+right-handed. With components $(B_R,B_Z,B_\phi)$, a current-density
 extension starting from $\mu_0\mathbf J=\nabla\times\mathbf B$ must therefore
 use
 
@@ -890,7 +923,9 @@ $$
 The poloidal derivatives are obtained from the analytic finite-element
 derivatives and the inverse geometry Jacobian. The toroidal derivatives are
 obtained from the analytic Fourier derivatives. No finite differences are
-used in either calculation.
+used in either calculation. Both pointwise and batched evaluation return
+`NaN` for all three magnetic components at singular mappings or `R == 0`,
+where these formulas cannot be evaluated directly.
 
 ## Uniform rectangular-grid interpolation
 
@@ -982,8 +1017,45 @@ P_{ij}=\sum_{v,d,k}
 S_{dve}P_{dkN(v,e)}H_{dv}(s_{ij},t_{ij})T_k(\phi).
 $$
 
+Two runnable scripts in `example/` implement the examples below. Run the
+commands shown here from the repository root:
+
+- [`plot_jorek_model711_grid.py`](example/plot_jorek_model711_grid.py) plots total fields.
+- [`plot_jorek_model711_grid_nonaxisymmetric.py`](example/plot_jorek_model711_grid_nonaxisymmetric.py)
+  plots total and summed $n>0$ fields, locating each grid point only once.
+
+Both use SI-derived units by default: velocities in m/s, number density in
+m$^{-3}$, temperatures in eV, and displayed time in ms. Use `--jorek-units`
+only when the original normalization is wanted. The default input is
+`jorek000000.h5` in the repository root, angle is 30 degrees, and grid size is 241 by 301. That full
+grid can take considerable time; start with a smaller preview:
+
+```console
+python example/plot_jorek_model711_grid.py --grid 21 31 --variables rho,T_i,T_e
+python example/plot_jorek_model711_grid_nonaxisymmetric.py jorek060000_3D.h5 \
+  --grid 21 31 --variables rho,BR,BZ,B_phi
+```
+
+The supplied `jorek000000.h5` is axisymmetric, so its $n>0$ fields are zero.
+Use `jorek060000_3D.h5` to display nonzero perturbations. Without `--output`,
+the scripts open the figure(s). To save instead:
+
+```console
+python example/plot_jorek_model711_grid.py --grid 21 31 --output total_grid.png
+python example/plot_jorek_model711_grid_nonaxisymmetric.py jorek060000_3D.h5 \
+  --grid 21 31 --output grid.png
+```
+
+The second command writes `grid_total.png` and `grid_nonaxisymmetric.png`.
+Use `--r-range RMIN RMAX`, `--z-range ZMIN ZMAX`, `--phi DEGREES`, and
+`--variables` to customize the plots. The shared `interpolate_prescribed_grid`
+function also accepts equal-shaped nonuniform or curvilinear coordinate arrays
+and returns total and optional non-axisymmetric field dictionaries.
+
 The following example reuses the point-search bounds and Fourier arrays rather
-than rebuilding them for every grid point:
+than rebuilding them for every grid point. The prescribed ranges
+$R=1.15$–$2.15$ m and $Z=-0.95$–$0.80$ m enclose the supplied ASDEX Upgrade
+mesh with a small margin. Points outside the curved mesh remain `NaN`:
 
 ```python
 import math
@@ -991,10 +1063,12 @@ from pathlib import Path
 
 import numpy as np
 
-from util.plot_jorek_model711_h5 import (
+from plot_jorek_model711_h5 import (
     PLOT_VARIABLES,
     calculate_values_in_element,
     evaluate_at_position,
+    enable_si_units,
+    convert_fields_to_si,
     load_restart,
     make_element_search_bounds,
     nonaxisymmetric_toroidal_basis,
@@ -1002,13 +1076,14 @@ from util.plot_jorek_model711_h5 import (
     toroidal_basis,
 )
 
-restart = load_restart(Path("jorek000100.h5"))
+restart = load_restart(Path("jorek000000.h5"))
+si_scales = enable_si_units(restart)
 phi_degrees = 30.0
 
 # Example prescribed grid. R_grid and Z_grid may instead be any equal-shaped
 # arrays of physical coordinates, including a nonuniform or curvilinear grid.
-R_values = np.linspace(2.0, 3.2, 241)
-Z_values = np.linspace(-1.1, 1.1, 301)
+R_values = np.linspace(1.15, 2.15, 241)
+Z_values = np.linspace(-0.95, 0.80, 301)
 R_grid, Z_grid = np.meshgrid(R_values, Z_values, indexing="xy")
 
 search_bounds = make_element_search_bounds(restart)
@@ -1032,9 +1107,11 @@ for index in np.ndindex(R_grid.shape):
         prepared,
     )
     if result is None:
-        continue  # The requested physical point is outside the JOREK mesh.
+        continue  # Outside the mesh or point location did not converge.
     for name, value in result["values"].items():
         fields[name][index] = value
+
+fields = convert_fields_to_si(fields, si_scales)
 ```
 
 To calculate the summed $n>0$ fields on the same prescribed grid, prepare a
@@ -1054,6 +1131,7 @@ nonaxis_values = calculate_values_in_element(
     nonaxis_prepared,
     include_equilibrium=False,
 )
+nonaxis_values = convert_fields_to_si(nonaxis_values, si_scales)
 ```
 
 Store `nonaxis_values` in arrays just as for `fields`. The important rule is to
@@ -1085,6 +1163,7 @@ at most four columns.
 - Only `jorek_model=711` with exactly nine model variables is accepted.
 - Only polynomial orders three and five are supported.
 - Only axisymmetric grid geometry (`n_coord_tor=1`) is supported.
+- Fourier modes are consecutive multiples of `n_period`, as in JOREK `det_modes`.
 - Total and summed `n > 0` fields are reconstructed at one requested toroidal
   angle; individual positive harmonics are not plotted.
 - The script plots values and derived magnetic components, not general field
@@ -1094,3 +1173,21 @@ at most four columns.
   plotting on large meshes.
 - Plot sampling is element-local, so neighboring elements retain duplicate
   samples along their common edge.
+
+## Regression checks
+
+Run `python -m unittest discover -s tests -v` from this directory. Tests cover
+stored and fallback normalization, SI field/time conversion, final-iterate
+evaluation, stagnation, outside-point rejection, and failure reporting.
+`tests/test_synthetic_model711.py` independently constructs curved cubic and
+quintic elements from Bernstein control points with signed element sizes, then
+checks magnetic fields against analytic expressions. It also checks
+collapsed-axis damping, axis-flag parsing, extreme Jacobian scaling, and
+invalid/singular inputs
+without any external restart files. Run those portable checks alone with
+`python -m unittest discover -s tests -p test_synthetic_model711.py -v`.
+
+When the local restart files are available, the full suite also verifies stored
+normalization, 48 near-axis locations,
+pointwise/batched field agreement, and zero-radius masking. Restart-based
+checks are skipped if the local 3D fixture is absent.
